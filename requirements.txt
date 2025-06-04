@@ -1,0 +1,9 @@
+# requirements.txt
+fastapi
+uvicorn[standard]
+python-multipart
+Pillow
+pytesseract
+google-generativeai
+requests
+# Tambahkan library lain jika kamu menggunakannya (misalnya, untuk QR code nanti)
