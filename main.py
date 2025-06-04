@@ -10,6 +10,7 @@ import uuid # Untuk membuat nama file unik sementara
 import shutil # Untuk menghapus direktori sementara
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 # from pydantic import BaseModel # Tidak digunakan saat ini, bisa dihapus jika tidak ada rencana
 
 # --- Konfigurasi Logging Awal ---
@@ -64,6 +65,15 @@ except Exception as e:
 print("DEBUG: Menginisialisasi aplikasi FastAPI...")
 app = FastAPI(title="OCR & Threat Detection API", version="1.0.0")
 print("DEBUG: Aplikasi FastAPI berhasil diinisialisasi.")
+
+# Tambahkan ini setelah inisialisasi app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Direktori untuk menyimpan gambar yang diupload sementara
 TEMP_IMAGE_DIR = "temp_uploaded_images"
