@@ -27,6 +27,14 @@ SPAM_PREDICT_API_URL = os.environ.get('SPAM_PREDICT_API_URL') # Default jika tid
 if not GOOGLE_API_KEY:
     raise ValueError("Environment variable GOOGLE_API_KEY belum diatur!")
 genai.configure(api_key=GOOGLE_API_KEY)
+# Debug: Cek apakah API key valid dengan mencoba mengambil daftar model
+try:
+    model_count = 0
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            model_count += 1
+    if model_count == 0:
+        raise ValueError("Tidak ada model yang mendukung generateContent ditemukan. Periksa API key atau koneksi.")
 
 # Inisialisasi FastAPI
 app = FastAPI(title="OCR & Threat Detection API", version="1.0.0")
