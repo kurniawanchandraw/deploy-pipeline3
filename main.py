@@ -167,6 +167,10 @@ def detect_spam_via_api(text_to_check: str) -> dict | None:
         return {"error": "Respons API Spam tidak valid."}
 
 # --- Endpoint FastAPI ---
+@app.get("/status") # Path endpoint-nya adalah /status
+async def get_status():
+    return {"status": "API is running"}
+
 @app.post("/process_screenshot/")
 async def process_screenshot(image: UploadFile = File(...)):
     """
