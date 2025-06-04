@@ -10,50 +10,92 @@ import uuid # Untuk membuat nama file unik sementara
 import shutil # Untuk menghapus direktori sementara
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel # Untuk request body jika diperlukan nanti
+from fastapi.middleware.cors import CORSMiddleware
+# from pydantic import BaseModel # Tidak digunakan saat ini, bisa dihapus jika tidak ada rencana
+
+# --- Konfigurasi Logging Awal ---
+print("DEBUG: Memulai aplikasi FastAPI...")
 
 # --- Konfigurasi Global & Environment Variables ---
-# PENTING: Path Tesseract ini mungkin tidak diperlukan atau berbeda di Railway
-# Jika Tesseract terinstal via Dockerfile dan ada di PATH sistem, pytesseract biasanya menemukannya.
-# Jika masih bermasalah di Railway, Anda mungkin perlu mengaturnya via env var atau investigasi path di container.
+print("DEBUG: Mengambil Environment Variables...")
 TESSERACT_CMD_PATH = os.environ.get('TESSERACT_CMD')
 if TESSERACT_CMD_PATH:
+    print(f"DEBUG: TESSERACT_CMD_PATH ditemukan: {TESSERACT_CMD_PATH}")
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD_PATH
+else:
+    print("DEBUG: TESSERACT_CMD_PATH tidak diatur, pytesseract akan mencari di PATH sistem.")
 
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
-SPAM_PREDICT_API_URL = os.environ.get('SPAM_PREDICT_API_URL') # Default jika tidak diset
+SPAM_PREDICT_API_URL = os.environ.get('SPAM_PREDICT_API_URL')
 # PHISHING_PREDICT_API_URL = os.environ.get('PHISHING_PREDICT_API_URL') # Untuk nanti
 
+print(f"DEBUG: GOOGLE_API_KEY (sebagian): ...{GOOGLE_API_KEY[-6:] if GOOGLE_API_KEY and len(GOOGLE_API_KEY) > 6 else 'TIDAK ADA ATAU TERLALU PENDEK'}")
+print(f"DEBUG: SPAM_PREDICT_API_URL: {SPAM_PREDICT_API_URL}")
+
 if not GOOGLE_API_KEY:
+    print("ERROR FATAL: Environment variable GOOGLE_API_KEY belum diatur!")
     raise ValueError("Environment variable GOOGLE_API_KEY belum diatur!")
-genai.configure(api_key=GOOGLE_API_KEY)
-# Debug: Cek apakah API key valid dengan mencoba mengambil daftar model
+
 try:
+    print("DEBUG: Mengkonfigurasi library genai dengan API key...")
+    genai.configure(api_key=GOOGLE_API_KEY)
+    print("DEBUG: Konfigurasi genai.configure BERHASIL.")
+
+    # Debug: Cek apakah API key valid dengan mencoba mengambil daftar model
+    print("DEBUG: Memvalidasi API key dengan mengambil daftar model Gemini...")
     model_count = 0
     for m in genai.list_models():
         if 'generateContent' in m.supported_generation_methods:
             model_count += 1
-    if model_count == 0:
+    
+    if model_count > 0:
+        print(f"DEBUG: Validasi API Key BERHASIL. Ditemukan {model_count} model yang mendukung generateContent.")
+    else:
+        # Ini seharusnya tidak terjadi jika API key valid dan API service aktif
+        print("ERROR FATAL: Tidak ada model Gemini yang mendukung generateContent ditemukan. Periksa API key, koneksi, atau status layanan Google.")
         raise ValueError("Tidak ada model yang mendukung generateContent ditemukan. Periksa API key atau koneksi.")
 
+except Exception as e:
+    # Menangkap error dari genai.configure() atau genai.list_models()
+    print(f"ERROR FATAL saat konfigurasi atau validasi API Key Gemini: {type(e).__name__} - {str(e)}")
+    # Detail error akan membantu mengetahui apakah ini 'API_KEY_INVALID' atau masalah lain
+    raise ValueError(f"Gagal validasi API Key Gemini saat startup: {str(e)}")
+        
 # Inisialisasi FastAPI
+print("DEBUG: Menginisialisasi aplikasi FastAPI...")
 app = FastAPI(title="OCR & Threat Detection API", version="1.0.0")
+print("DEBUG: Aplikasi FastAPI berhasil diinisialisasi.")
+
+# Tambahkan ini setelah inisialisasi app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Direktori untuk menyimpan gambar yang diupload sementara
 TEMP_IMAGE_DIR = "temp_uploaded_images"
-os.makedirs(TEMP_IMAGE_DIR, exist_ok=True)
+if not os.path.exists(TEMP_IMAGE_DIR):
+    print(f"DEBUG: Membuat direktori sementara: {TEMP_IMAGE_DIR}")
+    os.makedirs(TEMP_IMAGE_DIR, exist_ok=True)
+else:
+    print(f"DEBUG: Direktori sementara sudah ada: {TEMP_IMAGE_DIR}")
 
 
-# --- Fungsi Helper dari Skrip Sebelumnya (dimodifikasi sedikit jika perlu) ---
+# --- Fungsi Helper ---
 
 def perform_ocr(image_path: str, lang: str = 'eng+ind') -> str | None:
+    print(f"DEBUG OCR: Memulai OCR untuk gambar: {image_path}")
     try:
         img = Image.open(image_path)
         custom_config = r'--oem 3 --psm 6'
         extracted_text = pytesseract.image_to_string(img, lang=lang, config=custom_config)
-        print("--- Hasil Teks dari Tesseract ---") # Untuk logging di server
+        print("--- Hasil Teks dari Tesseract ---")
         print(extracted_text)
         print("---------------------------------")
+        print(f"DEBUG OCR: OCR berhasil untuk {image_path}.")
         return extracted_text
     except FileNotFoundError:
         print(f"Error OCR: File gambar tidak ditemukan di {image_path}")
@@ -61,10 +103,9 @@ def perform_ocr(image_path: str, lang: str = 'eng+ind') -> str | None:
     except pytesseract.TesseractNotFoundError:
         error_msg = "Error OCR: Tesseract tidak ditemukan atau tidak ada di PATH server. Pastikan Tesseract terinstal di environment deployment."
         print(error_msg)
-        # Di production, error Tesseract tidak boleh terjadi jika Dockerfile benar.
         raise HTTPException(status_code=500, detail=error_msg)
     except Exception as e:
-        print(f"Error OCR Lain: {e}")
+        print(f"Error OCR Lain pada {image_path}: {type(e).__name__} - {str(e)}")
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan saat OCR: {str(e)}")
 
 
@@ -73,17 +114,19 @@ def extract_info_with_gemini(text_from_ocr: str,
                              top_p: float = 0.95,
                              top_k: int = 40,
                              max_tokens: int = 1024) -> dict | None:
+    print(f"DEBUG Gemini: Memulai ekstraksi info dari teks OCR (panjang: {len(text_from_ocr)} karakter).")
     if not text_from_ocr or not text_from_ocr.strip():
         print("Info Gemini: Teks input kosong atau hanya spasi, tidak memanggil API Gemini.")
-        # Kembalikan struktur JSON default yang menandakan tidak ada konten
         return {
             "extracted_urls": [],
-            "potential_sms_content": [],
+            "potential_sms_content": "", # Diubah menjadi string kosong agar konsisten
             "contains_urls": False,
             "contains_text_content": False
         }
 
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash') # Pastikan model ini sesuai dengan API key dan projectmu
+    
+    # Perbaikan pada contoh JSON di dalam prompt
     prompt = f"""
     Anda adalah asisten AI yang sangat ahli dalam menganalisis teks hasil OCR dan mengekstraksi informasi relevan untuk deteksi phishing dan spam.
     Tugas Anda adalah membaca teks berikut yang berasal dari OCR sebuah gambar, lalu:
@@ -117,7 +160,7 @@ def extract_info_with_gemini(text_from_ocr: str,
           "original_ocr_snippet": "potongan_teks_ocr_asli_opsional_1"
         }}
       ],
-      "potential_sms_content": "satu_string_gabungan_semua_teks_sms_relevan",
+      "potential_sms_content": "satu_string_gabungan_semua_teks_sms_relevan_hasil_gemini",
       "contains_urls": false,
       "contains_text_content": false
     }}
@@ -127,7 +170,10 @@ def extract_info_with_gemini(text_from_ocr: str,
         temperature=temperature, top_p=top_p, top_k=top_k, max_output_tokens=max_tokens
     )
     try:
+        print("DEBUG Gemini: Mengirim request ke model.generate_content...")
         response = model.generate_content(prompt, generation_config=generation_config)
+        print("DEBUG Gemini: Respons diterima dari model.")
+        
         cleaned_response_text = response.text.strip()
         if cleaned_response_text.startswith("```json"):
             cleaned_response_text = cleaned_response_text[7:]
@@ -135,34 +181,41 @@ def extract_info_with_gemini(text_from_ocr: str,
             cleaned_response_text = cleaned_response_text[:-3]
         cleaned_response_text = cleaned_response_text.strip()
         
-        # print(f"DEBUG: Cleaned response text for JSON parsing:\n{cleaned_response_text}")
+        # print(f"DEBUG Gemini: Cleaned response text for JSON parsing:\n{cleaned_response_text}")
         parsed_output = json.loads(cleaned_response_text)
-        # Pastikan potential_sms_content adalah string, bukan list (sesuai modifikasi prompt)
+        print("DEBUG Gemini: Parsing JSON respons BERHASIL.")
+
+        # Pastikan potential_sms_content adalah string
         if isinstance(parsed_output.get("potential_sms_content"), list):
+            print("DEBUG Gemini: Mengubah potential_sms_content dari list menjadi string.")
             parsed_output["potential_sms_content"] = " ".join(parsed_output["potential_sms_content"])
 
         return parsed_output
     except json.JSONDecodeError as e:
         print(f"Error Gemini: Gagal parsing JSON - {e}")
-        print(f"Raw Response Text dari Gemini:\n{response.text if 'response' in locals() else 'N/A'}")
+        print(f"Raw Response Text dari Gemini yang gagal di-parse:\n{response.text if 'response' in locals() and hasattr(response, 'text') else 'N/A atau response tidak punya .text'}")
         raise HTTPException(status_code=500, detail="Gagal memproses respons dari LLM (JSON Decode Error).")
     except Exception as e:
-        error_detail = f"Error Gemini Lain: {e}"
+        error_detail = f"Error Gemini Lain: {type(e).__name__} - {str(e)}"
         if 'response' in locals() and hasattr(response, 'prompt_feedback'):
              error_detail += f" | Prompt Feedback: {response.prompt_feedback}"
-        print(error_detail)
+        print(error_detail) # Ini akan mencetak error 'API key not valid' jika itu masalahnya
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan saat berkomunikasi dengan LLM: {str(e)}")
 
 
 def detect_spam_via_api(text_to_check: str) -> dict | None:
+    print(f"DEBUG API Spam: Mengirim teks (awal: '{text_to_check[:50]}...') ke {SPAM_PREDICT_API_URL}")
     if not SPAM_PREDICT_API_URL:
-        print("Error: SPAM_PREDICT_API_URL belum dikonfigurasi.")
-        return {"error": "URL API Spam tidak dikonfigurasi."}
+        print("Error API Spam: SPAM_PREDICT_API_URL belum dikonfigurasi.")
+        return {"error": "URL API Spam tidak dikonfigurasi."} # Kembalikan dict agar konsisten
     try:
         payload = {"text": text_to_check}
-        response = requests.post(SPAM_PREDICT_API_URL, json=payload, timeout=20) # Timeout lebih lama untuk API eksternal
+        response = requests.post(SPAM_PREDICT_API_URL, json=payload, timeout=20)
+        print(f"DEBUG API Spam: Status respons dari API Spam: {response.status_code}")
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        print("DEBUG API Spam: Respons JSON diterima dan diparsing.")
+        return result
     except requests.exceptions.Timeout:
         print(f"Error API Spam: Request timeout ke {SPAM_PREDICT_API_URL}")
         return {"error": "API Spam timeout."}
@@ -171,16 +224,18 @@ def detect_spam_via_api(text_to_check: str) -> dict | None:
         return {"error": f"Gagal menghubungi API Spam: {str(e)}"}
     except json.JSONDecodeError:
         print(f"Error API Spam: Respons bukan JSON valid.")
-        # print(f"Raw Response: {response.text if 'response' in locals() else 'N/A'}")
+        print(f"Raw Response dari API Spam: {response.text if 'response' in locals() else 'N/A'}")
         return {"error": "Respons API Spam tidak valid."}
 
 # --- Endpoint FastAPI ---
-@app.get("/status") # Path endpoint-nya adalah /status
+@app.get("/status", summary="Cek status API", tags=["Utility"])
 async def get_status():
-    return {"status": "API is running"}
+    """Endpoint sederhana untuk mengecek apakah API berjalan."""
+    print("DEBUG: Endpoint /status diakses.")
+    return {"status": "API is running", "message": "Welcome to OCR & Threat Detection API!"}
 
-@app.post("/process_screenshot/")
-async def process_screenshot(image: UploadFile = File(...)):
+@app.post("/process_screenshot/", summary="Proses Screenshot untuk Deteksi Ancaman", tags=["Processing"])
+async def process_screenshot(image: UploadFile = File(..., description="File gambar screenshot (PNG, JPG, JPEG, BMP, TIFF)")):
     """
     Endpoint untuk memproses screenshot:
     1. Menerima file gambar.
@@ -189,56 +244,52 @@ async def process_screenshot(image: UploadFile = File(...)):
     4. Mengirim teks SMS ke API deteksi spam.
     5. (Future) Mengirim URL ke API deteksi phishing.
     """
+    print(f"DEBUG Endpoint: Menerima request ke /process_screenshot untuk file: {image.filename}")
     temp_image_path = None
     try:
-        # Membuat nama file unik untuk gambar yang diupload
         file_extension = os.path.splitext(image.filename)[1]
         if not file_extension.lower() in ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']:
+            print(f"ERROR Endpoint: Format file tidak didukung: {image.filename}")
             raise HTTPException(status_code=400, detail="Format file tidak didukung. Gunakan PNG, JPG, JPEG, BMP, atau TIFF.")
 
         temp_image_filename = f"{uuid.uuid4()}{file_extension}"
         temp_image_path = os.path.join(TEMP_IMAGE_DIR, temp_image_filename)
+        print(f"DEBUG Endpoint: Menyimpan gambar sementara ke: {temp_image_path}")
 
-        # Menyimpan gambar yang diupload ke path sementara
         with open(temp_image_path, "wb") as buffer:
             shutil.copyfileobj(image.file, buffer)
+        print(f"DEBUG Endpoint: Gambar sementara berhasil disimpan.")
 
         # 1. Lakukan OCR
         ocr_text = perform_ocr(temp_image_path)
-        if ocr_text is None: # perform_ocr sudah raise HTTPException jika ada error fatal
-            ocr_text = "" # Jika error minor dan return None tapi tidak raise, anggap teks kosong
+        # perform_ocr sudah raise HTTPException jika ada error fatal, 
+        # jadi jika sampai sini dan ocr_text is None, itu kasus yang tidak terduga atau error minor.
+        # Untuk keamanan, kita tetap anggap teks kosong jika None.
+        if ocr_text is None: ocr_text = "" 
 
         # 2. Ekstrak informasi menggunakan Gemini LLM
         gemini_extraction_results = extract_info_with_gemini(ocr_text)
+        # extract_info_with_gemini sudah raise HTTPException jika ada error fatal
         if gemini_extraction_results is None:
-             # extract_info_with_gemini sudah raise HTTPException jika ada error fatal
-            raise HTTPException(status_code=500, detail="Gagal mendapatkan hasil ekstraksi dari LLM.")
+             # Ini seharusnya tidak tercapai jika error handling di extract_info_with_gemini benar
+            raise HTTPException(status_code=500, detail="Gagal mendapatkan hasil ekstraksi dari LLM (hasil None tak terduga).")
 
-
-        # 3. Proses Deteksi Spam (jika ada konten teks)
+        # 3. Proses Deteksi Spam
         spam_detection_outputs = []
         potential_sms_content = gemini_extraction_results.get("potential_sms_content", "")
         
-        # Sesuai modifikasi prompt, potential_sms_content sekarang adalah string tunggal
         if gemini_extraction_results.get("contains_text_content") and potential_sms_content and potential_sms_content.strip():
-            print(f"\n[INFO] Konten teks (SMS) terdeteksi. Mengirim ke API Deteksi Spam:")
-            print(f"  -> Memproses Teks SMS: '{potential_sms_content[:200]}...'")
+            print(f"\n[INFO] Konten teks (SMS) terdeteksi. Mengirim ke API Deteksi Spam.")
             spam_result = detect_spam_via_api(potential_sms_content)
-            if spam_result:
-                spam_detection_outputs.append({
-                    "analysed_text": potential_sms_content,
-                    "detection_result": spam_result
-                })
-            else:
-                 spam_detection_outputs.append({
-                    "analysed_text": potential_sms_content,
-                    "detection_result": {"error": "Gagal mendapatkan hasil deteksi spam dari API."}
-                })
+            # spam_result akan berisi dict dengan 'error' jika gagal, atau hasil prediksi jika berhasil
+            spam_detection_outputs.append({
+                "analysed_text_snippet": potential_sms_content[:200] + "..." if len(potential_sms_content) > 200 else potential_sms_content,
+                "detection_result": spam_result
+            })
         else:
             print("\n[INFO] Tidak ada konten teks (SMS) relevan yang diekstrak oleh Gemini untuk deteksi spam.")
 
-
-        # 4. Proses Deteksi Phishing (Placeholder untuk implementasi selanjutnya)
+        # 4. Proses Deteksi Phishing (Placeholder)
         phishing_detection_outputs = []
         extracted_urls_objects = gemini_extraction_results.get("extracted_urls", [])
         if gemini_extraction_results.get("contains_urls") and extracted_urls_objects:
@@ -247,9 +298,6 @@ async def process_screenshot(image: UploadFile = File(...)):
                 url_to_check = url_obj.get("url")
                 if url_to_check:
                     print(f"  -> URL Ditemukan: {url_to_check}")
-                    # Nantinya:
-                    # phishing_result = detect_phishing_via_api(url_to_check)
-                    # phishing_detection_outputs.append({"url": url_to_check, "detection_result": phishing_result})
                     phishing_detection_outputs.append({
                         "url": url_to_check,
                         "detection_result": {"status": "Phishing detection not yet implemented."}
@@ -257,30 +305,32 @@ async def process_screenshot(image: UploadFile = File(...)):
         else:
             print("\n[INFO] Tidak ada URL yang diekstrak oleh Gemini.")
 
-        # Gabungkan semua hasil
         final_response = {
-            "ocr_output": ocr_text,
+            "ocr_output_snippet": ocr_text[:500] + "..." if len(ocr_text) > 500 else ocr_text, # Kirim snippet saja
             "llm_extraction": gemini_extraction_results,
             "spam_detection_results": spam_detection_outputs,
             "phishing_detection_results": phishing_detection_outputs
         }
+        print("DEBUG Endpoint: Mengirim respons akhir.")
         return JSONResponse(content=final_response)
 
     except HTTPException as http_exc:
-        # Re-raise HTTPException agar FastAPI menanganinya
-        raise http_exc
+        print(f"DEBUG Endpoint: HTTPException ditangkap: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc # Re-raise agar FastAPI menanganinya
     except Exception as e:
-        # Tangani error tak terduga lainnya
-        print(f"Terjadi error tak terduga di endpoint /process_screenshot: {e}")
-        raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal server: {str(e)}")
+        print(f"ERROR FATAL Tak Terduga di endpoint /process_screenshot: {type(e).__name__} - {str(e)}")
+        # Cetak traceback untuk error tak terduga
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal server yang tidak terduga: {str(e)}")
     finally:
-        # Selalu bersihkan file gambar sementara jika sudah dibuat
         if temp_image_path and os.path.exists(temp_image_path):
             try:
                 os.remove(temp_image_path)
-                print(f"File sementara {temp_image_path} dihapus.")
+                print(f"DEBUG Endpoint: File sementara {temp_image_path} dihapus.")
             except Exception as e_remove:
-                print(f"Gagal menghapus file sementara {temp_image_path}: {e_remove}")
+                print(f"ERROR Endpoint: Gagal menghapus file sementara {temp_image_path}: {e_remove}")
 
 # Jalankan dengan Uvicorn (untuk development lokal):
 # uvicorn main:app --reload
+# print("DEBUG: Skrip main.py selesai dieksekusi (level global). Aplikasi FastAPI seharusnya berjalan jika dipanggil via uvicorn.")
