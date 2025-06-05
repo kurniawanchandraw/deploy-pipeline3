@@ -27,10 +27,11 @@ else:
 
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 SPAM_PREDICT_API_URL = os.environ.get('SPAM_PREDICT_API_URL')
-# PHISHING_PREDICT_API_URL = os.environ.get('PHISHING_PREDICT_API_URL') # Untuk nanti
+PHISHING_PREDICT_API_URL = os.environ.get('PHISHING_PREDICT_API_URL')
 
 print(f"DEBUG: GOOGLE_API_KEY (sebagian): ...{GOOGLE_API_KEY[-6:] if GOOGLE_API_KEY and len(GOOGLE_API_KEY) > 6 else 'TIDAK ADA ATAU TERLALU PENDEK'}")
-print(f"DEBUG: SPAM_PREDICT_API_URL: {SPAM_PREDICT_API_URL}")
+print(f"DEBUG: SPAM_PREDICT_API_URL: {SPAM_PREDICT_API_URL[-6:]}")
+print(f"DEBUG: PHISHING_PREDICT_API_URL: {PHISHING_PREDICT_API_URL[-6:] if PHISHING_PREDICT_API_URL else 'TIDAK ADA ATAU TERLALU PENDEK'}")
 
 if not GOOGLE_API_KEY:
     print("ERROR FATAL: Environment variable GOOGLE_API_KEY belum diatur!")
@@ -227,6 +228,30 @@ def detect_spam_via_api(text_to_check: str) -> dict | None:
         print(f"Raw Response dari API Spam: {response.text if 'response' in locals() else 'N/A'}")
         return {"error": "Respons API Spam tidak valid."}
 
+def detect_phish_via_api(text_to_check: str) -> dict | None:
+    print(f"DEBUG API URL: Mengirim teks (awal: '{text_to_check[:50]}...') ke {PHISHING_PREDICT_API_URL}")
+    if not PHISHING_PREDICT_API_URL:
+        print("Error API URL: PHISHING_PREDICT_API_URL belum dikonfigurasi.")
+        return {"error": "PHISHING API URL tidak dikonfigurasi."} # Kembalikan dict agar konsisten
+    try:
+        payload = {"url": text_to_check}
+        response = requests.post(PHISHING_PREDICT_API_URL, json=payload, timeout=20)
+        print(f"DEBUG API PHISHING: Status respons dari API PHISHING: {response.status_code}")
+        response.raise_for_status()
+        result = response.json()
+        print("DEBUG API PHISHING: Respons JSON diterima dan diparsing.")
+        return result
+    except requests.exceptions.Timeout:
+        print(f"Error API PHISHING: Request timeout ke {PHISHING_PREDICT_API_URL}")
+        return {"error": "API PHISHING timeout."}
+    except requests.exceptions.RequestException as e:
+        print(f"Error API PHISHING: Tidak bisa terhubung atau request gagal - {e}")
+        return {"error": f"Gagal menghubungi API PHISHING: {str(e)}"}
+    except json.JSONDecodeError:
+        print(f"Error API PHISHING: Respons bukan JSON valid.")
+        print(f"Raw Response dari API PHISHING: {response.text if 'response' in locals() else 'N/A'}")
+        return {"error": "Respons API PHISHING tidak valid."}
+
 # --- Endpoint FastAPI ---
 @app.get("/status", summary="Cek status API", tags=["Utility"])
 async def get_status():
@@ -242,7 +267,7 @@ async def process_screenshot(image: UploadFile = File(..., description="File gam
     2. Melakukan OCR.
     3. Mengirim teks OCR ke Gemini untuk ekstraksi URL dan teks SMS.
     4. Mengirim teks SMS ke API deteksi spam.
-    5. (Future) Mengirim URL ke API deteksi phishing.
+    5. Mengirim URL ke API deteksi phishing.
     """
     print(f"DEBUG Endpoint: Menerima request ke /process_screenshot untuk file: {image.filename}")
     temp_image_path = None
@@ -289,7 +314,7 @@ async def process_screenshot(image: UploadFile = File(..., description="File gam
         else:
             print("\n[INFO] Tidak ada konten teks (SMS) relevan yang diekstrak oleh Gemini untuk deteksi spam.")
 
-        # 4. Proses Deteksi Phishing (Placeholder)
+        # 4. Proses Deteksi Phishing
         phishing_detection_outputs = []
         extracted_urls_objects = gemini_extraction_results.get("extracted_urls", [])
         if gemini_extraction_results.get("contains_urls") and extracted_urls_objects:
@@ -298,9 +323,10 @@ async def process_screenshot(image: UploadFile = File(..., description="File gam
                 url_to_check = url_obj.get("url")
                 if url_to_check:
                     print(f"  -> URL Ditemukan: {url_to_check}")
+                    phishing_result = detect_phish_via_api(url_to_check)
                     phishing_detection_outputs.append({
                         "url": url_to_check,
-                        "detection_result": {"status": "Phishing detection not yet implemented."}
+                        "detection_result": phishing_result
                     })
         else:
             print("\n[INFO] Tidak ada URL yang diekstrak oleh Gemini.")
