@@ -63,19 +63,6 @@ Tesseract OCR dengan bahasa Indonesia dan Inggris:
 apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind
 ```
 
-Berikut **kode markdown-nya secara eksplisit**, menggunakan blok kode markdown (` ``` `) untuk bagian kode dan JSON agar tidak terjadi kegagalan rendering:
-
-````markdown
-## 🛠️ Pengaturan & Instalasi
-
-### 1. Dependensi Sistem
-
-Instal Tesseract dan bahasa yang dibutuhkan:
-
-```bash
-apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-ind
-````
-
 ### 2. Dependensi Python
 
 Instal semua library Python dari `requirements.txt`:
