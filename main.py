@@ -131,19 +131,21 @@ def extract_info_with_gemini(text_from_ocr: str,
     prompt = f"""
     Anda adalah asisten AI yang sangat ahli dalam menganalisis teks hasil OCR dan mengekstraksi informasi relevan untuk deteksi phishing dan spam.
     Tugas Anda adalah membaca teks berikut yang berasal dari OCR sebuah gambar, lalu:
-    1. Identifikasi dan ekstrak SEMUA string yang merupakan URL atau link.
-    2. Identifikasi dan ekstrak SEMUA segmen teks yang relevan yang BUKAN merupakan URL (ini bisa jadi konten SMS).
+    1. Identifikasi dan ekstrak SEMUA string yang merupakan URL atau link yang bisa diklik untuk navigasi web.
+    2. Identifikasi dan ekstrak SEMUA segmen teks yang relevan yang BUKAN merupakan URL (ini bisa jadi konten SMS, termasuk alamat email).
 
     Perhatikan hal-hal berikut untuk EKSTRAKSI URL:
-    - URL bisa dalam berbagai format: dimulai dengan http://, https://, www., atau bahkan hanya domain.tld (misalnya, example.com).
-    - Kenali juga skema URL non-HTTP seperti wa.me/, ftp://, mailto:, dll.
-    - Teks OCR mungkin mengandung kesalahan. Cobalah untuk mengoreksi kesalahan umum pada URL (misalnya, "http:ll" menjadi "http://", "example. com" menjadi "example.com", "g00gle.com" menjadi "google.com").
-    - Untuk setiap URL yang diekstrak, sertakan "url" yang dikoreksi dan "original_ocr_snippet" (potongan teks OCR asli tempat URL itu ditemukan, jika memungkinkan dan relevan).
+    - URL adalah alamat yang merujuk ke halaman web, seperti yang dimulai dengan http://, https://, www., atau domain seperti example.com.
+    - Kenali juga skema URL non-HTTP seperti wa.me/ atau link pendek seperti bit.ly.
+    - **PENTING: Jangan sertakan alamat email (contoh: user@example.com) sebagai URL.** Alamat email harus dianggap sebagai bagian dari konten teks biasa.
+    - Teks OCR mungkin mengandung kesalahan. Cobalah untuk mengoreksi kesalahan umum pada URL.
+    - Untuk setiap URL yang diekstrak, sertakan "url" yang dikoreksi dan "original_ocr_snippet".
 
     Perhatikan hal-hal berikut untuk EKSTRAKSI KONTEN TEKS (NON-URL):
-    - Fokus pada teks yang terlihat seperti pesan, promosi, instruksi, atau informasi yang biasanya dikirim melalui SMS atau platform pesan.
-    - Abaikan teks-teks yang sangat pendek, tidak bermakna, atau noise dari antarmuka pengguna (misalnya, "Text Message", "Today 5:03 PM", nama operator), kecuali jika itu bagian tak terpisahkan dari pesan utama.
-    - Hasil "potential_sms_content" harus berupa SATU STRING TUNGGAL yang berisi gabungan semua teks relevan yang ditemukan. Jika ada beberapa paragraf atau baris teks yang relevan, gabungkan menjadi satu string dengan newline karakter jika sesuai untuk menjaga keterbacaan.
+    - Fokus pada teks yang terlihat seperti pesan, promosi, atau instruksi.
+    - **Sertakan alamat email yang ditemukan di sini, sebagai bagian dari konten teks.**
+    - Abaikan teks noise dari antarmuka pengguna (misalnya, "Text Message", "Today 5:03 PM").
+    - Hasil "potential_sms_content" harus berupa SATU STRING TUNGGAL yang berisi gabungan semua teks relevan yang ditemukan.
 
     Teks dari OCR:
     ---
@@ -152,20 +154,20 @@ def extract_info_with_gemini(text_from_ocr: str,
 
     Berikan output HANYA dalam format JSON berikut.
     - Jika tidak ada URL yang ditemukan, "extracted_urls" harus berupa list kosong dan "contains_urls" harus false.
-    - Jika tidak ada konten teks relevan (non-URL) yang ditemukan, "potential_sms_content" harus berupa string kosong dan "contains_text_content" harus false.
+    - Jika tidak ada konten teks relevan, "potential_sms_content" harus berupa string kosong dan "contains_text_content" harus false.
 
     {{
       "extracted_urls": [
         {{
-          "url": "url_yang_benar_dan_sudah_dikoreksi_1",
+          "url": "url_web_yang_benar_dan_sudah_dikoreksi_1",
           "original_ocr_snippet": "potongan_teks_ocr_asli_opsional_1"
         }}
       ],
-      "potential_sms_content": "satu_string_gabungan_semua_teks_sms_relevan_hasil_gemini",
+      "potential_sms_content": "satu_string_gabungan_semua_teks_sms_relevan_termasuk_email_jika_ada",
       "contains_urls": false,
       "contains_text_content": false
     }}
-    Pastikan output adalah JSON yang valid dan tidak ada teks penjelasan lain di luar blok JSON.
+    Pastikan output adalah JSON yang valid.
     """
     generation_config = genai.types.GenerationConfig(
         temperature=temperature, top_p=top_p, top_k=top_k, max_output_tokens=max_tokens
